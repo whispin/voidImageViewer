@@ -22,28 +22,154 @@ jobs:
       with:
         submodules: recursive
     
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-    
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: ${{ matrix.platform }}
     
-    - name: Build solution
+    - name: Build manually (VS2005 project compatibility)
       run: |
-        msbuild voidImageViewer.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /m
+        $platform = "${{ matrix.platform }}"
+        $config = "${{ matrix.configuration }}"
+        
+        Write-Host "Building for platform: $platform, configuration: $config"
+        
+        # Create output directory
+        if ($platform -eq "x86") {
+          $outputDir = "$config"
+        } else {
+          $outputDir = "$platform\$config"
+        }
+        New-Item -ItemType Directory -Force -Path $outputDir
+        
+        # Compile source files
+        $sourceFiles = @(
+          "src\viv.c",
+          "src\config.c", 
+          "src\crt.c",
+          "src\debug.c",
+          "src\ini.c",
+          "src\mem.c",
+          "src\os.c",
+          "src\render.c",
+          "src\render_d3d.c",
+          "src\render_gdi.c", 
+          "src\render_opengl.c",
+          "src\render_software.c",
+          "src\string.c",
+          "src\utf8.c",
+          "src\wchar.c",
+          "src\webp.c"
+        )
+        
+        # WebP library files
+        $webpFiles = @(
+          "libwebp\src\dec\alpha_dec.c",
+          "libwebp\src\dec\buffer_dec.c",
+          "libwebp\src\dec\frame_dec.c",
+          "libwebp\src\dec\idec_dec.c",
+          "libwebp\src\dec\io_dec.c",
+          "libwebp\src\dec\quant_dec.c",
+          "libwebp\src\dec\tree_dec.c",
+          "libwebp\src\dec\vp8_dec.c",
+          "libwebp\src\dec\vp8l_dec.c",
+          "libwebp\src\dec\webp_dec.c",
+          "libwebp\src\demux\anim_decode.c",
+          "libwebp\src\demux\demux.c",
+          "libwebp\src\dsp\alpha_processing.c",
+          "libwebp\src\dsp\cpu.c",
+          "libwebp\src\dsp\dec.c",
+          "libwebp\src\dsp\dec_clip_tables.c",
+          "libwebp\src\dsp\filters.c",
+          "libwebp\src\dsp\lossless.c",
+          "libwebp\src\dsp\rescaler.c",
+          "libwebp\src\dsp\upsampling.c",
+          "libwebp\src\dsp\yuv.c",
+          "libwebp\src\utils\bit_reader_utils.c",
+          "libwebp\src\utils\color_cache_utils.c",
+          "libwebp\src\utils\filters_utils.c",
+          "libwebp\src\utils\huffman_utils.c",
+          "libwebp\src\utils\quant_levels_dec_utils.c",
+          "libwebp\src\utils\random_utils.c",
+          "libwebp\src\utils\rescaler_utils.c",
+          "libwebp\src\utils\thread_utils.c",
+          "libwebp\src\utils\utils.c"
+        )
+        
+        $allFiles = $sourceFiles + $webpFiles
+        
+        # Compile flags
+        $cflags = @(
+          "/O2",
+          "/GL",
+          "/DNDEBUG",
+          "/DWIN32",
+          "/D_WINDOWS",
+          "/DUNICODE",
+          "/D_UNICODE",
+          "/Isrc",
+          "/Ilibwebp\src",
+          "/MT"
+        )
+        
+        if ($platform -eq "x64") {
+          $cflags += "/DVERSION_X64"
+        }
+        
+        # Link flags and libraries
+        $linkFlags = @(
+          "/LTCG",
+          "/SUBSYSTEM:WINDOWS",
+          "/OPT:REF",
+          "/OPT:ICF"
+        )
+        
+        $libraries = @(
+          "kernel32.lib",
+          "user32.lib", 
+          "gdi32.lib",
+          "shell32.lib",
+          "comctl32.lib",
+          "shlwapi.lib",
+          "opengl32.lib",
+          "d3d9.lib"
+        )
+        
+        if ($platform -eq "x86") {
+          $libraries += "lib\minicrt.lib"
+        }
+        
+        # Compile resource file
+        Write-Host "Compiling resources..."
+        rc /fo "$outputDir\voidImageViewer.res" res\voidImageViewer.rc
+        
+        # Compile and link
+        Write-Host "Compiling and linking..."
+        $compileCmd = "cl " + ($cflags -join " ") + " " + ($allFiles -join " ") + " $outputDir\voidImageViewer.res /Fe:$outputDir\voidImageViewer.exe /link " + ($linkFlags -join " ") + " " + ($libraries -join " ")
+        
+        Write-Host "Command: $compileCmd"
+        Invoke-Expression $compileCmd
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Build failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+        
+        Write-Host "Build completed successfully"
     
     - name: Prepare artifacts
       run: |
         $platform = "${{ matrix.platform }}"
         $config = "${{ matrix.configuration }}"
         
+        # Determine output directory based on platform
         if ($platform -eq "x86") {
           $outputDir = "$config"
         } else {
           $outputDir = "$platform\$config"
         }
+        
+        Write-Host "Looking for executable in: $outputDir"
         
         # Create artifact directory
         New-Item -ItemType Directory -Force -Path "artifacts\$platform"
@@ -51,15 +177,26 @@ jobs:
         # Copy executable
         if (Test-Path "$outputDir\voidImageViewer.exe") {
           Copy-Item "$outputDir\voidImageViewer.exe" "artifacts\$platform\"
+          Write-Host "Copied voidImageViewer.exe"
+        } else {
+          Write-Host "Executable not found in $outputDir"
+          Write-Host "Available files:"
+          if (Test-Path $outputDir) {
+            Get-ChildItem $outputDir -Recurse
+          }
         }
         
         # Copy any additional files if they exist
         if (Test-Path "$outputDir\*.dll") {
           Copy-Item "$outputDir\*.dll" "artifacts\$platform\"
+          Write-Host "Copied DLL files"
         }
         
         # List what we have
-        Get-ChildItem "artifacts\$platform" -Recurse
+        Write-Host "Final artifacts:"
+        if (Test-Path "artifacts\$platform") {
+          Get-ChildItem "artifacts\$platform" -Recurse
+        }
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
