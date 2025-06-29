@@ -1,0 +1,77 @@
+name: Build void Image Viewer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        platform: [x86, x64]
+        configuration: [Release]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.platform }}
+    
+    - name: Build solution
+      run: |
+        msbuild voidImageViewer.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /m
+    
+    - name: Prepare artifacts
+      run: |
+        $platform = "${{ matrix.platform }}"
+        $config = "${{ matrix.configuration }}"
+        
+        if ($platform -eq "x86") {
+          $outputDir = "$config"
+        } else {
+          $outputDir = "$platform\$config"
+        }
+        
+        # Create artifact directory
+        New-Item -ItemType Directory -Force -Path "artifacts\$platform"
+        
+        # Copy executable
+        if (Test-Path "$outputDir\voidImageViewer.exe") {
+          Copy-Item "$outputDir\voidImageViewer.exe" "artifacts\$platform\"
+        }
+        
+        # Copy any additional files if they exist
+        if (Test-Path "$outputDir\*.dll") {
+          Copy-Item "$outputDir\*.dll" "artifacts\$platform\"
+        }
+        
+        # List what we have
+        Get-ChildItem "artifacts\$platform" -Recurse
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: voidImageViewer-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: artifacts/${{ matrix.platform }}/
+        retention-days: 30
+    
+    - name: Upload release artifacts (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v4
+      with:
+        name: voidImageViewer-release-${{ matrix.platform }}
+        path: artifacts/${{ matrix.platform }}/
+        retention-days: 90
